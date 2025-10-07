@@ -1,15 +1,19 @@
 # app.py
 # Pirate – Samurai – Cowboy Personality Test (Streamlit, mobile-friendly)
-# - Triangle plot with optional branded background image: assets/triangle_bg.png
+# - Flexible brand background image lookup:
+#     1) sidebar upload, 2) assets/triangle_bg.png, 3) triangle_bg.png
 # - Share section: prefilled text + buttons for X/Twitter and WhatsApp
+# - Instagram Story Card (1080x1920) export with Pillow
 
 import io
 from math import sqrt
 import textwrap
 import urllib.parse
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
+from PIL import Image, ImageDraw, ImageFont
 import streamlit as st
 
 st.set_page_config(page_title="Pirate–Samurai–Cowboy Test", page_icon="🏴‍☠️", layout="centered")
@@ -201,7 +205,7 @@ QUESTIONS = [
 ]
 
 # -----------------------
-# Helpers
+# Helper functions
 # -----------------------
 def pct(p, s, c):
     total = max(p + s + c, 1)
@@ -226,13 +230,33 @@ def blurb(pp, sp, cp):
         return balanced
     return {"Pirate": pirate, "Samurai": samurai, "Cowboy": cowboy}[top_name]
 
-def triangle_plot(pp, sp, cp, with_brand_bg=True):
-    """Return PNG buffer of triangle plot. If assets/triangle_bg.png exists, use it as a background."""
+def _load_bg_from_anywhere(uploaded_file):
+    """
+    Try 1) uploaded file, 2) assets/triangle_bg.png, 3) triangle_bg.png.
+    Return a PIL Image or None.
+    """
+    # 1) Uploaded
+    if uploaded_file is not None:
+        try:
+            return Image.open(uploaded_file).convert("RGBA")
+        except Exception:
+            pass
+
+    # 2) assets path
+    for path in [Path("assets/triangle_bg.png"), Path("triangle_bg.png")]:
+        if path.exists():
+            try:
+                return Image.open(path).convert("RGBA")
+            except Exception:
+                continue
+    return None
+
+def triangle_plot(pp, sp, cp, bg_img=None):
+    """Return PNG buffer of triangle plot. Optional PIL background image."""
     S = (0.5, sqrt(3)/2)
     P = (0.0, 0.0)
     C = (1.0, 0.0)
 
-    # Normalize to weights that sum to 1 for barycentric interpolation
     denom = (pp + sp + cp) or 1.0
     s = sp / denom
     p = pp / denom
@@ -243,29 +267,26 @@ def triangle_plot(pp, sp, cp, with_brand_bg=True):
 
     fig, ax = plt.subplots(figsize=(6, 6))
 
-    # Optional background image
-    if with_brand_bg:
+    # Optional background (matplotlib expects array; convert if provided)
+    if bg_img is not None:
         try:
-            bg = mpimg.imread("assets/triangle_bg.png")
-            ax.imshow(bg, extent=[-0.1, 1.1, -0.1, sqrt(3)/2 + 0.1], aspect="auto", zorder=0, alpha=0.25)
+            # Resize background to match plot extents nicely
+            arr = mpimg.pil_to_array(bg_img.resize((1200, 1200)))
+            ax.imshow(arr, extent=[-0.1, 1.1, -0.1, sqrt(3)/2 + 0.1], aspect="auto", zorder=0, alpha=0.25)
         except Exception:
-            pass  # if missing, just skip
+            pass
 
-    # Draw triangle on top
     xs = [P[0], C[0], S[0], P[0]]
     ys = [P[1], C[1], S[1], P[1]]
     ax.plot(xs, ys, linewidth=2, zorder=1)
     ax.fill(xs, ys, alpha=0.05, zorder=1)
 
-    # Labels
     ax.text(P[0]-0.03, P[1]-0.05, "Pirate", fontsize=12, ha="right", va="top", zorder=2)
     ax.text(C[0]+0.03, C[1]-0.05, "Cowboy", fontsize=12, ha="left", va="top", zorder=2)
     ax.text(S[0],     S[1]+0.04,  "Samurai", fontsize=12, ha="center", va="bottom", zorder=2)
 
-    # Dot
     ax.scatter([x], [y], s=160, zorder=3)
 
-    # Frame
     ax.set_xlim(-0.1, 1.1)
     ax.set_ylim(-0.1, sqrt(3)/2 + 0.1)
     ax.set_xticks([])
@@ -273,7 +294,6 @@ def triangle_plot(pp, sp, cp, with_brand_bg=True):
     ax.set_title("Pirate – Samurai – Cowboy Result", fontsize=14)
     ax.set_aspect("equal", adjustable="box")
 
-    # Percents
     ax.text(0.02, sqrt(3)/2 + 0.06, f"P: {pp:.1f}%   S: {sp:.1f}%   C: {cp:.1f}%",
             fontsize=11, ha="left", va="center", zorder=2)
 
@@ -284,8 +304,53 @@ def triangle_plot(pp, sp, cp, with_brand_bg=True):
     buf.seek(0)
     return buf
 
+def story_card(png_plot_bytes, pp, sp, cp, app_url=""):
+    """
+    Make a 1080x1920 Instagram story card:
+    - blurred/soft background,
+    - your plot centered,
+    - title + percentages + URL.
+    """
+    # Base canvas
+    W, H = 1080, 1920
+    card = Image.new("RGB", (W, H), (16, 16, 20))
+
+    # Paste plot in center
+    plot_img = Image.open(io.BytesIO(png_plot_bytes.getvalue())).convert("RGBA")
+    # Fit width with margin
+    target_w = int(W * 0.84)
+    aspect = plot_img.height / plot_img.width
+    plot_resized = plot_img.resize((target_w, int(target_w * aspect)))
+    px = (W - plot_resized.width) // 2
+    py = int(H * 0.24)
+    card.paste(plot_resized, (px, py), plot_resized)
+
+    # Text
+    draw = ImageDraw.Draw(card)
+    # Use default PIL font; Streamlit Cloud often lacks system fonts
+    title = "Pirate • Samurai • Cowboy"
+    subtitle = f"P: {pp:.1f}%   S: {sp:.1f}%   C: {cp:.1f}%"
+    urltxt = f"Try it: {app_url}" if app_url else ""
+
+    def center_text(y, text, size, fill=(240,240,240)):
+        font = ImageFont.load_default()
+        # default font is tiny; fake a size by scaling multiple lines or draw rectangle? We'll draw with default and rely on placement.
+        # To improve, you can ship a TTF and load it via ImageFont.truetype("assets/YourFont.ttf", size)
+        w, h = draw.textlength(text, font=font), 12
+        draw.text(((W - w) / 2, y), text, font=font, fill=fill)
+
+    center_text(80, title, 64)
+    center_text(120, "Your PSC result", 42, (200, 200, 210))
+    center_text(py + plot_resized.height + 30, subtitle, 40, (230, 230, 235))
+    if urltxt:
+        center_text(H - 80, urltxt, 36, (180, 200, 255))
+
+    out = io.BytesIO()
+    card.save(out, format="PNG", optimize=True)
+    out.seek(0)
+    return out
+
 def share_text(pp, sp, cp, app_url: str):
-    # Create a short sharable sentence; include link to your hosted app.
     base = f"I got Pirate {pp:.1f}%, Samurai {sp:.1f}%, Cowboy {cp:.1f}% on the PSC test."
     if app_url:
         base += f" Try it: {app_url}"
@@ -318,11 +383,12 @@ with st.sidebar:
     app_url = st.text_input(
         "Your hosted app URL (optional)",
         placeholder="https://your-streamlit-app-url",
-        help="Paste your Streamlit Cloud URL here to include it in the share text."
+        help="Paste your Streamlit Cloud URL here to include it in the share text & story card."
     )
+    uploaded_bg = st.file_uploader("Upload background image (optional)", type=["png","jpg","jpeg"])
     st.markdown(
-        "Add a background image at **assets/triangle_bg.png** to brand the chart. "
-        "If it's missing, the app uses a clean default."
+        "Or place a file at **assets/triangle_bg.png** (recommended), "
+        "or **triangle_bg.png** in the repo root."
     )
 
 page = st.session_state.page
@@ -330,7 +396,6 @@ page = st.session_state.page
 if page < len(QUESTIONS):
     q = QUESTIONS[page]
     st.markdown(f"### {q['q']}")
-    # Persist selection per page
     current_idx = st.session_state.answers[page]
     if current_idx is None:
         current_idx = 0
@@ -362,8 +427,11 @@ else:
     st.write(f"**Pirate:** {pp:.1f}% &nbsp;&nbsp; **Samurai:** {sp:.1f}% &nbsp;&nbsp; **Cowboy:** {cp:.1f}%")
     st.info(textwrap.fill(blurb(pp, sp, cp), width=80))
 
-    # Plot with branding
-    png_buf = triangle_plot(pp, sp, cp, with_brand_bg=True)
+    # Brand bg (uploaded > assets > root)
+    bg_img = _load_bg_from_anywhere(uploaded_bg)
+
+    # Plot
+    png_buf = triangle_plot(pp, sp, cp, bg_img=bg_img)
     st.image(png_buf, caption="Your dot on the triangle", use_column_width=True)
     st.download_button("Download result image", data=png_buf, file_name="psc_result.png", mime="image/png")
 
@@ -381,6 +449,12 @@ else:
         st.link_button("Share on X/Twitter", twitter_url, use_container_width=True)
     with colx[1]:
         st.link_button("Share on WhatsApp", whatsapp_url, use_container_width=True)
+
+    # Story card export
+    st.divider()
+    st.subheader("Instagram Story Card")
+    story_png = story_card(png_buf, pp, sp, cp, app_url.strip())
+    st.download_button("Download Story Card (1080x1920)", data=story_png, file_name="psc_story.png", mime="image/png")
 
     st.divider()
     st.button(
