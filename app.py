@@ -247,61 +247,69 @@ def _load_bg(uploaded_file):
     return None
 
 def triangle_plot(pp, sp, cp, bg_img=None):
-    """Return PNG buffer of triangle plot. Optional PIL background image."""
-    S = (0.5, sqrt(3)/2)
-    P = (0.0, 0.0)
-    C = (1.0, 0.0)
+    """
+    Clean single-triangle output:
+    - white background
+    - ONE outlined equilateral triangle (no fill)
+    - Correct corner labels: Pirate (top), Samurai (bottom-left), Cowboy (bottom-right)
+    - Dot placed by barycentric mix of (Pirate, Samurai, Cowboy)
+    - Percentages centered BELOW the figure
+    NOTE: bg_img is intentionally ignored for a super clean look.
+    """
+    import io
+    import matplotlib.pyplot as plt
+    from math import sqrt
 
-    denom = (pp + sp + cp) or 1.0
-    s = sp / denom
-    p = pp / denom
-    c = cp / denom
+    # Triangle vertices (normalized)
+    P = (0.0, 0.0)                # bottom-left  (Samurai)
+    C = (1.0, 0.0)                # bottom-right (Cowboy)
+    S = (0.5, sqrt(3)/2)          # top          (Pirate)
 
-    x = p*P[0] + s*S[0] + c*C[0]
-    y = p*P[1] + s*S[1] + c*C[1]
+    # Normalize and compute barycentric mix
+    total = max(pp + sp + cp, 1e-9)
+    wp, ws, wc = pp/total, sp/total, cp/total
 
-    fig, ax = plt.subplots(figsize=(6, 6))
+    # Interpolate point
+    x = wp*P[0] + ws*S[0] + wc*C[0]
+    y = wp*P[1] + ws*S[1] + wc*C[1]
 
-    # Background
-    if bg_img is not None:
-        try:
-            arr = mpimg.pil_to_array(bg_img.resize((1200, 1200)))
-            ax.imshow(arr, extent=[-0.1, 1.1, -0.1, sqrt(3)/2 + 0.1], aspect="auto", zorder=0, alpha=0.18)
-        except Exception:
-            pass
+    # Figure/canvas
+    fig, ax = plt.subplots(figsize=(6, 6), facecolor="white")
+    ax.set_facecolor("white")
 
-    # Triangle
+    # ONE outlined triangle (no fill)
     xs = [P[0], C[0], S[0], P[0]]
     ys = [P[1], C[1], S[1], P[1]]
-    ax.plot(xs, ys, linewidth=2, zorder=1)
-    ax.fill(xs, ys, alpha=0.05, zorder=1)
+    ax.plot(xs, ys, color="#1f1f1f", linewidth=3, zorder=1)
 
-    # Labels
-    ax.text(P[0]-0.03, P[1]-0.05, "Pirate", fontsize=12, ha="right", va="top", zorder=2)
-    ax.text(C[0]+0.03, C[1]-0.05, "Cowboy", fontsize=12, ha="left", va="top", zorder=2)
-    ax.text(S[0],     S[1]+0.04,  "Samurai", fontsize=12, ha="center", va="bottom", zorder=2)
+    # Correct corner labels
+    ax.text(S[0], S[1] + 0.03, "Pirate", fontsize=13, ha="center", va="bottom", zorder=2)
+    ax.text(P[0] - 0.02, P[1] - 0.02, "Samurai", fontsize=13, ha="right", va="top", zorder=2)
+    ax.text(C[0] + 0.02, C[1] - 0.02, "Cowboy", fontsize=13, ha="left", va="top", zorder=2)
 
-    # Dot
-    ax.scatter([x], [y], s=160, zorder=3)
+    # Result dot
+    ax.scatter([x], [y], s=180, color="orange", zorder=3)
 
-    # Frame
-    ax.set_xlim(-0.1, 1.1)
-    ax.set_ylim(-0.1, sqrt(3)/2 + 0.1)
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.set_title("Pirate – Samurai – Cowboy Result", fontsize=14)
+    # Axes cosmetics
+    pad = 0.1
+    ax.set_xlim(-pad, 1 + pad)
+    ax.set_ylim(-pad, S[1] + pad)
+    ax.set_xticks([]); ax.set_yticks([])
     ax.set_aspect("equal", adjustable="box")
+    ax.set_title("Pirate – Samurai – Cowboy Result", fontsize=14, pad=10)
 
-    # Percent text moved to lower-left to avoid overlap with bg art
-    ax.text(-0.08, -0.08, f"P {pp:.1f}%   S {sp:.1f}%   C {cp:.1f}%",
-            fontsize=11, ha="left", va="top", zorder=2)
+    # Percentages BELOW the figure
+    fig.text(0.5, 0.02, f"P {pp:.1f}%   S {sp:.1f}%   C {cp:.1f}%",
+             ha="center", va="center", fontsize=12)
 
-    plt.tight_layout()
+    # Save to buffer
+    plt.tight_layout(rect=[0.04, 0.06, 0.96, 0.98])
     buf = io.BytesIO()
     plt.savefig(buf, format="png", dpi=180)
     plt.close(fig)
     buf.seek(0)
     return buf
+
 
 def _load_font(size=48):
     """Load a real TTF (DejaVuSans from matplotlib) for crisp Story Card text."""
