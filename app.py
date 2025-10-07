@@ -1,9 +1,9 @@
 # app.py
-# Pirate – Samurai – Cowboy Personality Test (Streamlit, mobile-friendly)
-# - Flexible brand background image lookup:
-#     1) sidebar upload, 2) assets/triangle_bg.png, 3) triangle_bg.png
-# - Share section: prefilled text + buttons for X/Twitter and WhatsApp
-# - Instagram Story Card (1080x1920) export with Pillow
+# Pirate – Samurai – Cowboy Personality Test (Streamlit)
+# Fixes:
+# 1) Radios start with no selection; Next is disabled until chosen
+# 2) Title shows all three emojis (🏴‍☠️🥋🤠)
+# 3) Image share fixes: no deprecation warning, better layout, crisp Story Card text
 
 import io
 from math import sqrt
@@ -13,10 +13,11 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
+from matplotlib import font_manager
 from PIL import Image, ImageDraw, ImageFont
 import streamlit as st
 
-st.set_page_config(page_title="Pirate–Samurai–Cowboy Test", page_icon="🏴‍☠️", layout="centered")
+st.set_page_config(page_title="Pirate • Samurai • Cowboy Test", page_icon="⚔️", layout="centered")
 
 # -----------------------
 # Questionnaire + Weights
@@ -230,19 +231,13 @@ def blurb(pp, sp, cp):
         return balanced
     return {"Pirate": pirate, "Samurai": samurai, "Cowboy": cowboy}[top_name]
 
-def _load_bg_from_anywhere(uploaded_file):
-    """
-    Try 1) uploaded file, 2) assets/triangle_bg.png, 3) triangle_bg.png.
-    Return a PIL Image or None.
-    """
-    # 1) Uploaded
+def _load_bg(uploaded_file):
+    """Try uploaded file, then assets/triangle_bg.png, then triangle_bg.png at repo root."""
     if uploaded_file is not None:
         try:
             return Image.open(uploaded_file).convert("RGBA")
         except Exception:
             pass
-
-    # 2) assets path
     for path in [Path("assets/triangle_bg.png"), Path("triangle_bg.png")]:
         if path.exists():
             try:
@@ -267,26 +262,29 @@ def triangle_plot(pp, sp, cp, bg_img=None):
 
     fig, ax = plt.subplots(figsize=(6, 6))
 
-    # Optional background (matplotlib expects array; convert if provided)
+    # Background
     if bg_img is not None:
         try:
-            # Resize background to match plot extents nicely
             arr = mpimg.pil_to_array(bg_img.resize((1200, 1200)))
-            ax.imshow(arr, extent=[-0.1, 1.1, -0.1, sqrt(3)/2 + 0.1], aspect="auto", zorder=0, alpha=0.25)
+            ax.imshow(arr, extent=[-0.1, 1.1, -0.1, sqrt(3)/2 + 0.1], aspect="auto", zorder=0, alpha=0.18)
         except Exception:
             pass
 
+    # Triangle
     xs = [P[0], C[0], S[0], P[0]]
     ys = [P[1], C[1], S[1], P[1]]
     ax.plot(xs, ys, linewidth=2, zorder=1)
     ax.fill(xs, ys, alpha=0.05, zorder=1)
 
+    # Labels
     ax.text(P[0]-0.03, P[1]-0.05, "Pirate", fontsize=12, ha="right", va="top", zorder=2)
     ax.text(C[0]+0.03, C[1]-0.05, "Cowboy", fontsize=12, ha="left", va="top", zorder=2)
     ax.text(S[0],     S[1]+0.04,  "Samurai", fontsize=12, ha="center", va="bottom", zorder=2)
 
+    # Dot
     ax.scatter([x], [y], s=160, zorder=3)
 
+    # Frame
     ax.set_xlim(-0.1, 1.1)
     ax.set_ylim(-0.1, sqrt(3)/2 + 0.1)
     ax.set_xticks([])
@@ -294,8 +292,9 @@ def triangle_plot(pp, sp, cp, bg_img=None):
     ax.set_title("Pirate – Samurai – Cowboy Result", fontsize=14)
     ax.set_aspect("equal", adjustable="box")
 
-    ax.text(0.02, sqrt(3)/2 + 0.06, f"P: {pp:.1f}%   S: {sp:.1f}%   C: {cp:.1f}%",
-            fontsize=11, ha="left", va="center", zorder=2)
+    # Percent text moved to lower-left to avoid overlap with bg art
+    ax.text(-0.08, -0.08, f"P {pp:.1f}%   S {sp:.1f}%   C {cp:.1f}%",
+            fontsize=11, ha="left", va="top", zorder=2)
 
     plt.tight_layout()
     buf = io.BytesIO()
@@ -304,46 +303,45 @@ def triangle_plot(pp, sp, cp, bg_img=None):
     buf.seek(0)
     return buf
 
+def _load_font(size=48):
+    """Load a real TTF (DejaVuSans from matplotlib) for crisp Story Card text."""
+    try:
+        font_path = font_manager.findfont("DejaVu Sans")
+        return ImageFont.truetype(font_path, size)
+    except Exception:
+        return ImageFont.load_default()
+
 def story_card(png_plot_bytes, pp, sp, cp, app_url=""):
-    """
-    Make a 1080x1920 Instagram story card:
-    - blurred/soft background,
-    - your plot centered,
-    - title + percentages + URL.
-    """
-    # Base canvas
+    """Make a 1080x1920 Instagram story card with readable text."""
     W, H = 1080, 1920
     card = Image.new("RGB", (W, H), (16, 16, 20))
 
-    # Paste plot in center
     plot_img = Image.open(io.BytesIO(png_plot_bytes.getvalue())).convert("RGBA")
-    # Fit width with margin
-    target_w = int(W * 0.84)
+    target_w = int(W * 0.86)
     aspect = plot_img.height / plot_img.width
     plot_resized = plot_img.resize((target_w, int(target_w * aspect)))
     px = (W - plot_resized.width) // 2
-    py = int(H * 0.24)
+    py = int(H * 0.28)
     card.paste(plot_resized, (px, py), plot_resized)
 
-    # Text
     draw = ImageDraw.Draw(card)
-    # Use default PIL font; Streamlit Cloud often lacks system fonts
-    title = "Pirate • Samurai • Cowboy"
-    subtitle = f"P: {pp:.1f}%   S: {sp:.1f}%   C: {cp:.1f}%"
+    font_title = _load_font(72)
+    font_sub   = _load_font(44)
+    font_meta  = _load_font(38)
+
+    title = "🏴‍☠️ Pirate • 🥋 Samurai • 🤠 Cowboy"
+    subtitle = f"P {pp:.1f}%   S {sp:.1f}%   C {cp:.1f}%"
     urltxt = f"Try it: {app_url}" if app_url else ""
 
-    def center_text(y, text, size, fill=(240,240,240)):
-        font = ImageFont.load_default()
-        # default font is tiny; fake a size by scaling multiple lines or draw rectangle? We'll draw with default and rely on placement.
-        # To improve, you can ship a TTF and load it via ImageFont.truetype("assets/YourFont.ttf", size)
-        w, h = draw.textlength(text, font=font), 12
+    def center(text, y, font, fill=(240,240,240)):
+        w, _ = draw.textbbox((0,0), text, font=font)[2:]
         draw.text(((W - w) / 2, y), text, font=font, fill=fill)
 
-    center_text(80, title, 64)
-    center_text(120, "Your PSC result", 42, (200, 200, 210))
-    center_text(py + plot_resized.height + 30, subtitle, 40, (230, 230, 235))
+    center(title, 80, font_title)
+    center("Your PSC Result", 170, font_sub, (200, 210, 230))
+    center(subtitle, py + plot_resized.height + 36, font_sub, (230, 230, 235))
     if urltxt:
-        center_text(H - 80, urltxt, 36, (180, 200, 255))
+        center(urltxt, H - 120, font_meta, (180, 200, 255))
 
     out = io.BytesIO()
     card.save(out, format="PNG", optimize=True)
@@ -375,7 +373,7 @@ def prev_page():
 # -----------------------
 # UI
 # -----------------------
-st.title("🏴‍☠️ Pirate – Samurai – Cowboy Test")
+st.title("🏴‍☠️Pirate • 🥋Samurai • 🤠Cowboy Test")
 st.caption("Answer honestly. Phone-friendly. Share your dot on the triangle at the end.")
 
 with st.sidebar:
@@ -386,32 +384,35 @@ with st.sidebar:
         help="Paste your Streamlit Cloud URL here to include it in the share text & story card."
     )
     uploaded_bg = st.file_uploader("Upload background image (optional)", type=["png","jpg","jpeg"])
-    st.markdown(
-        "Or place a file at **assets/triangle_bg.png** (recommended), "
-        "or **triangle_bg.png** in the repo root."
-    )
+    st.markdown("Or keep a file at **assets/triangle_bg.png** or **triangle_bg.png** in the repo root.")
 
 page = st.session_state.page
 
 if page < len(QUESTIONS):
     q = QUESTIONS[page]
     st.markdown(f"### {q['q']}")
-    current_idx = st.session_state.answers[page]
-    if current_idx is None:
-        current_idx = 0
+
+    options = [opt for opt, _ in q["options"]]
+    # --- No default selection: index=None; return value is the option text or None ---
     choice = st.radio(
         "Choose one:",
-        options=[opt for opt, _ in q["options"]],
-        index=current_idx,
+        options=options,
+        index=None,                 # <-- nothing selected initially
         label_visibility="collapsed",
+        key=f"radio_{page}",        # unique key per page
     )
-    st.session_state.answers[page] = [opt for opt, _ in q["options"]].index(choice)
+
+    # update state answer if chosen
+    if choice is not None:
+        st.session_state.answers[page] = options.index(choice)
+    else:
+        st.session_state.answers[page] = None
 
     cols = st.columns(2)
     with cols[0]:
         st.button("← Back", on_click=prev_page, disabled=(page == 0))
     with cols[1]:
-        st.button("Next →", on_click=next_page)
+        st.button("Next →", on_click=next_page, disabled=(st.session_state.answers[page] is None))
 
     st.progress((page+1)/len(QUESTIONS))
 else:
@@ -428,11 +429,13 @@ else:
     st.info(textwrap.fill(blurb(pp, sp, cp), width=80))
 
     # Brand bg (uploaded > assets > root)
-    bg_img = _load_bg_from_anywhere(uploaded_bg)
+    bg_img = _load_bg(uploaded_bg)
 
     # Plot
     png_buf = triangle_plot(pp, sp, cp, bg_img=bg_img)
-    st.image(png_buf, caption="Your dot on the triangle", use_column_width=True)
+    st.image(png_buf, caption="Your dot on the triangle", use_container_width=True)
+
+    # Download image
     st.download_button("Download result image", data=png_buf, file_name="psc_result.png", mime="image/png")
 
     # Share section
